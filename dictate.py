@@ -28,7 +28,8 @@ APP_DIR = os.path.expanduser(
 )
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 
-STATE_DIR = "/tmp/whisper-alternative"
+# Temporary state (recording, pid, log). Override with WHISPER_ALT_STATE when testing.
+STATE_DIR = os.path.expanduser(os.environ.get("WHISPER_ALT_STATE", "/tmp/whisper-alternative"))
 AUDIO_FILE = os.path.join(STATE_DIR, "recording.wav")
 PID_FILE = os.path.join(STATE_DIR, "sox.pid")
 TIME_FILE = os.path.join(STATE_DIR, "start_time")
@@ -38,8 +39,8 @@ LOG_FILE = os.path.join(STATE_DIR, "dictate.log")
 DEFAULTS = {
     "whisper_cli": "/opt/homebrew/bin/whisper-cli",
     "sox": "/opt/homebrew/bin/sox",
-    "models_dir": "~/.config/whisper-alternative/models",
-    "sounds_dir": "~/.config/whisper-alternative/sounds",
+    "models_dir": "",  # empty = <app dir>/models
+    "sounds_dir": "",  # empty = <app dir>/sounds
     "start_sound": "sparkle_musicbox",
     "stop_sound": "sparkle_close",
     "min_record_seconds": 1.0,
@@ -64,12 +65,22 @@ def log(msg):
 def load_config():
     if not os.path.exists(CONFIG_FILE):
         sys.exit(f"config.json not found at {CONFIG_FILE}. Run install.sh first.")
-    with open(CONFIG_FILE) as f:
-        cfg = json.load(f)
+    try:
+        with open(CONFIG_FILE) as f:
+            cfg = json.load(f)
+    except ValueError as e:
+        sys.exit(f"{CONFIG_FILE} is not valid JSON ({e}). Fix it or re-run install.sh --config.")
     merged = dict(DEFAULTS)
     merged.update(cfg)
-    merged["models_dir"] = os.path.expanduser(merged["models_dir"])
-    merged["sounds_dir"] = os.path.expanduser(merged["sounds_dir"])
+    # Empty (or the old hard-coded default) means "inside the app folder", so a
+    # config copied from config.example.json also works with WHISPER_ALT_DIR.
+    for key, sub_dir in (("models_dir", "models"), ("sounds_dir", "sounds")):
+        value = merged.get(key) or ""
+        if not value or value == f"~/.config/whisper-alternative/{sub_dir}":
+            value = os.path.join(APP_DIR, sub_dir)
+        merged[key] = os.path.expanduser(value)
+    # Mode names are matched case-insensitively (the hotkey passes the name).
+    merged["modes"] = {str(k).lower(): v for k, v in merged["modes"].items()}
     return merged
 
 
@@ -163,16 +174,21 @@ def transcribe(cfg, mode):
     if mode.get("prompt"):
         cmd += ["--prompt", mode["prompt"]]
 
+    txt = out_base + ".txt"
+    if os.path.exists(txt):  # never reuse a previous dictation if whisper fails
+        os.remove(txt)
+
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         log(f"whisper-cli failed: {result.stderr[-400:]}")
+        return ""
 
-    txt = out_base + ".txt"
+    text = ""
     if os.path.exists(txt):
         with open(txt) as f:
-            text = f.read().strip()
-        return text.replace("[BLANK_AUDIO]", "").strip()
-    return ""
+            text = f.read().strip().replace("[BLANK_AUDIO]", "").strip()
+        os.remove(txt)  # don't leave what you said lying around in /tmp
+    return text
 
 
 def ollama_generate(mode, prompt):
@@ -242,7 +258,7 @@ def toggle(cfg, mode_name):
         text = ollama_generate(mode, text)
 
     paste_text(text)
-    log(f"Pasted ({mode_name}): {text[:100]}")
+    log(f"Pasted ({mode_name}): {len(text)} characters")
 
 
 # --- Diagnostics -----------------------------------------------------------
@@ -262,9 +278,13 @@ def check():
     row(os.access(cfg["whisper_cli"], os.X_OK), "whisper-cli", cfg["whisper_cli"])
     row(os.access(cfg["sox"], os.X_OK), "sox", cfg["sox"])
     row(os.path.isdir("/Applications/Hammerspoon.app"), "Hammerspoon.app")
-    row(find_sound(cfg, cfg["start_sound"]) is not None, "start sound", cfg["start_sound"])
-    row(find_sound(cfg, cfg["stop_sound"]) is not None, "stop sound", cfg["stop_sound"])
+    for label, key in (("start sound", "start_sound"), ("stop sound", "stop_sound")):
+        if not cfg[key]:
+            print(f"  off      {label} (disabled)")
+        else:
+            row(find_sound(cfg, cfg[key]) is not None, label, cfg[key])
     print("Modes:")
+    seen = {}
     for name, mode in cfg["modes"].items():
         if mode.get("enabled") is False:
             print(f"  off      {name} (disabled)")
@@ -272,6 +292,15 @@ def check():
         p = model_path(cfg, mode)
         row(os.path.isfile(p), f"{name:12s} {mode.get('hotkey', '-'):12s}",
             f"lang={mode.get('language', 'auto')} model={mode['model']}")
+        hk = "".join(str(mode.get("hotkey", "")).lower().split())
+        if not hk:
+            row(False, f"{name}: no hotkey set")
+        elif hk in seen:
+            row(False, f"{name}: hotkey {hk} is already used by '{seen[hk]}'")
+        else:
+            seen[hk] = name
+        if mode["model"].endswith(".en.bin") and mode.get("language", "auto") not in ("en", "auto"):
+            row(False, f"{name}: model {mode['model']} is English-only but language is {mode['language']}")
     print("\nAll good." if ok else "\nSomething is missing. See README > Troubleshooting.")
     return 0 if ok else 1
 

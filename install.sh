@@ -5,6 +5,7 @@
 #   ./install.sh --yes           accept all defaults, no questions
 #   ./install.sh --config my.json  use a config you prepared (see config.example.json)
 #   ./install.sh --check         only run diagnostics
+#   ./install.sh --no-download   do not download Whisper models (testing)
 #
 # Safe to re-run: it never overwrites an existing config.json unless --config is given,
 # and it never re-downloads a model that is already there.
@@ -15,13 +16,14 @@ APP_DIR="${WHISPER_ALT_DIR:-$HOME/.config/whisper-alternative}"
 HS_DIR="${HAMMERSPOON_DIR:-$HOME/.hammerspoon}"
 MODEL_BASE_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 
-YES=0; CONFIG_SRC=""; CHECK_ONLY=0
+YES=0; CONFIG_SRC=""; CHECK_ONLY=0; NO_DOWNLOAD=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --yes|-y) YES=1 ;;
     --config) CONFIG_SRC="$2"; shift ;;
     --check) CHECK_ONLY=1 ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    --no-download) NO_DOWNLOAD=1 ;;
+    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
   shift
@@ -44,14 +46,21 @@ fi
 
 # 1. Dependencies -------------------------------------------------------------
 say "1/5  Dependencies"
-if ! command -v brew >/dev/null 2>&1; then
-  cat <<'MSG'
+# Homebrew may be installed but not on PATH yet (fresh Macs, Apple Silicon or Intel).
+for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+  if ! command -v brew >/dev/null 2>&1 && [ -x "$b" ]; then eval "$("$b" shellenv)"; fi
+done
+if [ "${WA_SKIP_BREW:-0}" != 1 ] && ! command -v brew >/dev/null 2>&1; then
+  cat <<MSG
 Homebrew is not installed. Open Terminal, paste this line, press Enter, and
 follow the prompts (it asks for your Mac password):
 
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  /bin/bash -c "\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-Then run ./install.sh again.
+When it finishes, run the "Next steps" commands it prints (they add Homebrew to
+your PATH), then come back and run:
+
+  cd "$REPO_DIR" && ./install.sh
 MSG
   exit 1
 fi
@@ -69,22 +78,42 @@ echo "  sox:         $SOX_BIN"
 say "2/5  Copying files to $APP_DIR"
 mkdir -p "$APP_DIR/models" "$APP_DIR/sounds"
 cp "$REPO_DIR/dictate.py" "$APP_DIR/dictate.py"
-cp "$REPO_DIR/sounds/"* "$APP_DIR/sounds/"
+cp -n "$REPO_DIR/sounds/"* "$APP_DIR/sounds/" 2>/dev/null || true  # never overwrite sounds you changed
 chmod +x "$APP_DIR/dictate.py"
 
 # 3. Config -------------------------------------------------------------------
 say "3/5  Configuration"
 CONFIG="$APP_DIR/config.json"
 if [ -n "$CONFIG_SRC" ]; then
-  cp "$CONFIG_SRC" "$CONFIG"; echo "  Using $CONFIG_SRC"
+  [ "$(cd "$(dirname "$CONFIG_SRC")" && pwd)/$(basename "$CONFIG_SRC")" = "$CONFIG" ] || cp "$CONFIG_SRC" "$CONFIG"
+  echo "  Using $CONFIG_SRC"
+  # The example config hard-codes Apple Silicon paths: point them at the real binaries.
+  WHISPER_CLI="$WHISPER_CLI" SOX_BIN="$SOX_BIN" /usr/bin/python3 - "$CONFIG" <<'PY'
+import json, os, sys
+c = json.load(open(sys.argv[1]))
+for key, env in (("whisper_cli", "WHISPER_CLI"), ("sox", "SOX_BIN")):
+    if not os.access(os.path.expanduser(c.get(key, "")), os.X_OK) and os.access(os.environ[env], os.X_OK):
+        c[key] = os.environ[env]
+        print(f"  {key} -> {c[key]}")
+json.dump(c, open(sys.argv[1], "w"), indent=2, ensure_ascii=False)
+PY
 elif [ -f "$CONFIG" ]; then
   echo "  Keeping your existing $CONFIG (edit it to change hotkeys/languages/sounds)"
 else
   SOUNDS="$(cd "$APP_DIR/sounds" && ls | sed 's/\.[^.]*$//' | tr '\n' ' ')"
   echo "  Sounds available: $SOUNDS"
   echo "  (preview them any time with: scripts/preview_sounds.sh)"
+  echo "  Type a name from the list, a macOS sound (Tink, Pop, Glass ...), or 'none' for silence."
   ask START_SOUND "  Sound when recording starts" "sparkle_musicbox"
   ask STOP_SOUND  "  Sound when recording stops"  "sparkle_close"
+  fix_sound() { # fix_sound VAR default: 'none' -> silence, unknown name -> default
+    local v="${!1}"
+    if [ "$(echo "$v" | tr 'A-Z' 'a-z')" = "none" ]; then printf -v "$1" '%s' ""; return; fi
+    if ls "$APP_DIR/sounds/" | sed 's/\.[^.]*$//' | grep -qx "$v" || [ -f "/System/Library/Sounds/$v.aiff" ]; then return; fi
+    echo "  '$v' is not a known sound, using $2 instead"; printf -v "$1" '%s' "$2"
+  }
+  fix_sound START_SOUND sparkle_musicbox
+  fix_sound STOP_SOUND sparkle_close
   echo
   echo "  Hotkeys are written like ctrl+e, alt+cmd+d, ctrl+shift+s. Type 'none' to skip a mode."
   ask HK_EN   "  Hotkey for English dictation" "ctrl+e"
@@ -156,9 +185,15 @@ for m in $NEEDED; do
   if [ -f "$MODELS_DIR/$m" ]; then
     echo "  $m already present"
   else
+    if [ "$NO_DOWNLOAD" = 1 ]; then echo "  Skipping $m (--no-download)"; continue; fi
     echo "  Downloading $m (this can take a few minutes) ..."
-    curl -L --progress-bar -o "$MODELS_DIR/$m.part" "$MODEL_BASE_URL/$m"
-    mv "$MODELS_DIR/$m.part" "$MODELS_DIR/$m"
+    PART="${MODELS_DIR:?}/${m:?}.part"
+    curl -fL --progress-bar -o "$PART" "$MODEL_BASE_URL/$m" \
+      || { rm -f "$PART"; echo "  Download of $m failed. Check your internet connection and run ./install.sh again."; exit 1; }
+    if [ "$(wc -c < "$PART")" -lt 10000000 ]; then
+      rm -f "$PART"; echo "  $m downloaded incompletely. Run ./install.sh again."; exit 1
+    fi
+    mv "$PART" "$MODELS_DIR/$m"
   fi
 done
 
@@ -185,12 +220,16 @@ WHISPER_ALT_DIR="$APP_DIR" /usr/bin/python3 "$APP_DIR/dictate.py" --check || tru
 
 cat <<'MSG'
 
-Two macOS permissions are needed the first time (one-off):
-  1. Accessibility: System Settings > Privacy & Security > Accessibility > enable Hammerspoon
-     (lets it listen for hotkeys and paste the text).
-  2. Microphone: press your dictation hotkey once; macOS asks to allow Hammerspoon
-     to use the microphone. Click Allow.
+If Hammerspoon was already running, load the new hotkeys now: click its menu bar
+icon (or open the app) and choose "Reload Config".
 
-Then: press the hotkey, hear the sparkle, talk, press it again, see the text appear.
+Three macOS permissions are asked the first time (one-off). Click Allow on each:
+  1. Accessibility: System Settings > Privacy & Security > Accessibility > enable Hammerspoon
+     (lets it listen for hotkeys).
+  2. Microphone: press your dictation hotkey once; macOS asks to let Hammerspoon use the microphone.
+  3. Automation: the first time text is pasted, macOS asks whether Hammerspoon may control
+     "System Events". Click OK, otherwise the text stays on the clipboard but is not pasted.
+
+Then: press the hotkey, hear the start sound, talk, press it again, see the text appear.
 Change anything later in ~/.config/whisper-alternative/config.json and reload Hammerspoon.
 MSG

@@ -7,7 +7,7 @@
 --
 -- Nothing to edit here. Hotkeys, languages and sounds live in
 -- ~/.config/whisper-alternative/config.json. After editing it, reload
--- Hammerspoon (menu bar icon > Reload Config, or `hs -c "hs.reload()"`).
+-- Hammerspoon (Hammerspoon menu bar icon > Reload Config, or quit and reopen Hammerspoon).
 
 local M = {}
 
@@ -25,7 +25,7 @@ end
 -- "ctrl+shift+e" -> {"ctrl","shift"}, "e"
 local function parseHotkey(str)
   local parts = {}
-  for p in string.gmatch(string.lower(str), "[^+]+") do parts[#parts + 1] = p end
+  for p in string.gmatch(string.lower((str:gsub("%s", ""))), "[^+]+") do parts[#parts + 1] = p end
   local key = table.remove(parts)
   return parts, key
 end
@@ -42,15 +42,28 @@ local function runDictation(mode)
   lastTrigger[mode] = now
 
   local task
-  task = hs.task.new(PYTHON, function() runningTasks[task] = nil end, {SCRIPT, mode})
+  task = hs.task.new(PYTHON, function(exitCode, _, stdErr)
+    runningTasks[task] = nil
+    if exitCode ~= 0 then
+      -- Surface failures instead of a silent "hotkey does nothing".
+      local msg = (stdErr or ""):gsub("%s+$", ""):match("([^\n]*)$") or ""
+      hs.alert.show("Whisper Alternative failed" .. (msg ~= "" and (": " .. msg) or ". See /tmp/whisper-alternative/dictate.log"), 6)
+    end
+  end, {SCRIPT, mode})
   runningTasks[task] = true
   task:start()
 end
 
 local bound = 0
+local seenHotkeys = {}
 for name, mode in pairs(config.modes or {}) do
   if mode.enabled ~= false and mode.hotkey and mode.hotkey ~= "" then
     local mods, key = parseHotkey(mode.hotkey)
+    local combo = table.concat(mods, "+") .. "+" .. tostring(key)
+    if seenHotkeys[combo] then
+      hs.alert.show("Whisper Alternative: " .. name .. " and " .. seenHotkeys[combo] .. " share the hotkey " .. mode.hotkey, 6)
+    end
+    seenHotkeys[combo] = seenHotkeys[combo] or name
     local ok, err = pcall(function()
       hs.hotkey.bind(mods, key, function() runDictation(name) end)
     end)

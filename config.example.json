@@ -1,10 +1,10 @@
 {
-  "_comment": "Copy to ~/.config/whisper-alternative/config.json (install.sh does this). Hotkeys use ctrl, alt, cmd, shift joined with +. Language = Whisper ISO code or 'auto'. Model = file name inside models_dir.",
+  "_comment": "Copy to ~/.config/whisper-alternative/config.json (install.sh does this). Hotkeys use ctrl, alt, cmd, shift joined with +. Language = Whisper ISO code or 'auto'. Model = file name inside models_dir. Empty models_dir / sounds_dir mean the 'models' / 'sounds' folders next to config.json. Set a sound to \"\" for silence. Mode names are case-insensitive.",
 
   "whisper_cli": "/opt/homebrew/bin/whisper-cli",
   "sox": "/opt/homebrew/bin/sox",
-  "models_dir": "~/.config/whisper-alternative/models",
-  "sounds_dir": "~/.config/whisper-alternative/sounds",
+  "models_dir": "",
+  "sounds_dir": "",
 
   "start_sound": "sparkle_musicbox",
   "stop_sound": "sparkle_close",

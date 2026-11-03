@@ -5,6 +5,8 @@ runs `dictate.py`, which records the microphone with sox, transcribes with
 whisper.cpp, and pastes the text at the cursor. Read `README.md` for the human
 view. This file tells you how to install, configure and debug it for a user.
 
+**Sounds are the user's choice, not a requirement.** The sparkle sounds are the author's personal taste and only the *default*. Always ask the user which start/stop sound they want (any file in `sounds/`, a built-in macOS sound such as `Tink`, `Pop`, `Glass`, their own `.wav`/`.aiff`/`.mp3`, or `""` for silence) and never assume they want sparkles. Changing it later is a two-line edit in `config.json` (`start_sound`, `stop_sound`).
+
 ## File map
 
 | File | Role | Edit? |
@@ -23,6 +25,7 @@ runtime state and log in `/tmp/whisper-alternative/`.
 
 ## Setting it up for a user
 
+0. **Choose where to download the repo.** Ask the user where they want it. If they have no preference, use `~/Documents/whisper_alternative` (`git clone https://github.com/vsancnaj/whisper_alternative.git <folder>`). Never clone inside another project or an existing git repo, and if the folder already exists, ask before reusing or overwriting it. The clone is only needed to run `install.sh`: everything is copied to `~/.config/whisper-alternative/`, so the clone can live anywhere and be deleted afterwards (keep it for `scripts/uninstall.sh`).
 1. **Ask these questions first** (one message, give the defaults):
    - Which hotkey for English? (default `ctrl+e`)
    - Which other languages, and a hotkey for each? (default Spanish on `ctrl+s`; format `ctrl+x`, `alt+cmd+x`, `ctrl+shift+x`)
@@ -33,7 +36,7 @@ runtime state and log in `/tmp/whisper-alternative/`.
    `./install.sh --config /path/to/their.json`. Or run `./install.sh --yes` for all defaults.
    Never run `./install.sh` without a flag in a non-interactive session: it reads from `/dev/tty`.
 3. Run `./install.sh --check` (equivalent to `~/.config/whisper-alternative/dictate.py --check`) and show the output.
-4. Tell the user the two one-time permissions: Accessibility for Hammerspoon
+4. Tell the user the three one-time permissions (Accessibility, Microphone, and Automation → System Events for pasting): Accessibility for Hammerspoon
    (System Settings → Privacy & Security → Accessibility) and Microphone (macOS prompts on the first hotkey press). You cannot grant these for them.
 5. Ask them to click into a text field, press the hotkey, speak, press again, and confirm text appeared.
 
@@ -42,7 +45,7 @@ Re-running `install.sh` is safe: it keeps an existing `config.json` and skips mo
 ## Changing things later
 
 Everything is in `~/.config/whisper-alternative/config.json`; after editing, reload Hammerspoon
-(`hs -c "hs.reload()"`, or Hammerspoon menu bar icon → Reload Config if the `hs` CLI is not installed).
+(Hammerspoon menu bar icon → Reload Config; the `hs` CLI usually is not enabled, so do not rely on it).
 
 - New language: add a mode `{"hotkey": ..., "language": "<whisper code>", "model": "ggml-base.bin"}`. Non-English needs a model without `.en`. Then `./install.sh --yes` to fetch a missing model.
 - New sound: copy the file into `~/.config/whisper-alternative/sounds/`, set `start_sound`/`stop_sound` to its name without extension. macOS system sound names (`Tink`, `Pop`) also work. Empty string disables.
@@ -55,6 +58,7 @@ Everything is in `~/.config/whisper-alternative/config.json`; after editing, rel
 - `dictate.py --list` prints modes and hotkeys as configured.
 - `/tmp/whisper-alternative/dictate.log` has one line per start, stop, paste and error.
 - To test transcription without the mic: `say -o /tmp/t.aiff "testing" && sox /tmp/t.aiff -r 16000 -c 1 -b 16 /tmp/whisper-alternative/recording.wav`, then call `dictate.transcribe()` from Python with the loaded config.
+- **Safe test recipe** (never touches the user's real setup): `T=$(mktemp -d); WHISPER_ALT_DIR=$T/app WHISPER_ALT_STATE=$T/state HAMMERSPOON_DIR=$T/hs WA_SKIP_BREW=1 ./install.sh --yes --no-download`, then `WHISPER_ALT_DIR=$T/app WHISPER_ALT_STATE=$T/state /usr/bin/python3 $T/app/dictate.py --check`. Models show MISSING because nothing was downloaded; that is expected.
 - `WHISPER_ALT_DIR=/some/dir` makes both `dictate.py` and `install.sh` use another app directory (useful for testing without touching the user's real setup). `HAMMERSPOON_DIR` does the same for the Lua side; `WA_SKIP_BREW=1` skips Homebrew and the Hammerspoon reload.
 - Hotkey fires but nothing happens: Hammerspoon lacks Accessibility. Sound plays but no text: microphone permission, or `whisper-cli` error in the log.
 - The second hotkey press transcribes with the mode that *started* the recording (stored in `/tmp/whisper-alternative/mode`), so pressing a different language's hotkey to stop is harmless.
