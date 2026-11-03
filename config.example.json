@@ -1,0 +1,30 @@
+{
+  "_comment": "Copy to ~/.config/whisper-alternative/config.json (install.sh does this). Hotkeys use ctrl, alt, cmd, shift joined with +. Language = Whisper ISO code or 'auto'. Model = file name inside models_dir.",
+
+  "whisper_cli": "/opt/homebrew/bin/whisper-cli",
+  "sox": "/opt/homebrew/bin/sox",
+  "models_dir": "~/.config/whisper-alternative/models",
+  "sounds_dir": "~/.config/whisper-alternative/sounds",
+
+  "start_sound": "sparkle_musicbox",
+  "stop_sound": "sparkle_close",
+  "menubar_icon": "♥",
+
+  "min_record_seconds": 1.0,
+  "mic_gain_db": 20,
+
+  "modes": {
+    "english": { "hotkey": "ctrl+e", "language": "en",   "model": "ggml-base.en.bin" },
+    "spanish": { "hotkey": "ctrl+s", "language": "es",   "model": "ggml-base.bin" },
+    "auto":    { "hotkey": "ctrl+t", "language": "auto", "model": "ggml-base.bin" },
+
+    "generate": {
+      "enabled": false,
+      "hotkey": "alt+cmd+g",
+      "language": "en",
+      "model": "ggml-base.en.bin",
+      "ollama_url": "http://localhost:11434/api/generate",
+      "ollama_model": "qwen2.5:0.5b"
+    }
+  }
+}

@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.DS_Store
+# Whisper models are downloaded by install.sh, never committed (150 MB+ each)
+*.bin
